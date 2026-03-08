@@ -1,0 +1,202 @@
+"""Discord REST API v10 client using httpx."""
+
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, AsyncGenerator
+
+import httpx
+
+from .config import API_BASE, get_token
+
+# Discord epoch: 2015-01-01T00:00:00Z
+DISCORD_EPOCH = 1420070400000
+
+
+def snowflake_to_datetime(snowflake: int | str) -> datetime:
+    """Convert a Discord snowflake ID to a UTC datetime."""
+    ms = (int(snowflake) >> 22) + DISCORD_EPOCH
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
+
+def datetime_to_snowflake(dt: datetime) -> int:
+    """Convert a datetime to a Discord snowflake ID (for use as 'after' param)."""
+    ms = int(dt.timestamp() * 1000) - DISCORD_EPOCH
+    return ms << 22
+
+
+@asynccontextmanager
+async def get_client() -> AsyncGenerator[httpx.AsyncClient, None]:
+    """Async context manager for an authenticated httpx client."""
+    token = get_token()
+    async with httpx.AsyncClient(
+        base_url=API_BASE,
+        headers={
+            "Authorization": token,
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        },
+        timeout=30.0,
+    ) as client:
+        yield client
+
+
+async def _handle_rate_limit(response: httpx.Response) -> None:
+    """Sleep if we hit a rate limit."""
+    if response.status_code == 429:
+        data = response.json()
+        retry_after = data.get("retry_after", 1.0)
+        await asyncio.sleep(retry_after)
+    elif remaining := response.headers.get("X-RateLimit-Remaining"):
+        if int(remaining) == 0:
+            reset_after = float(response.headers.get("X-RateLimit-Reset-After", "1.0"))
+            await asyncio.sleep(reset_after)
+
+
+async def _get(client: httpx.AsyncClient, path: str, **params: Any) -> Any:
+    """GET request with rate limit handling and retry."""
+    for attempt in range(3):
+        response = await client.get(path, params=params)
+        if response.status_code == 429:
+            await _handle_rate_limit(response)
+            continue
+        await _handle_rate_limit(response)
+        response.raise_for_status()
+        return response.json()
+    raise RuntimeError(f"Rate limited after 3 retries: {path}")
+
+
+async def list_guilds(client: httpx.AsyncClient) -> list[dict]:
+    """List all guilds (servers) the user has joined."""
+    data = await _get(client, "/users/@me/guilds")
+    return [
+        {
+            "id": g["id"],
+            "name": g["name"],
+            "icon": g.get("icon"),
+            "owner": g.get("owner", False),
+        }
+        for g in data
+    ]
+
+
+async def list_channels(client: httpx.AsyncClient, guild_id: str) -> list[dict]:
+    """List all text channels in a guild."""
+    data = await _get(client, f"/guilds/{guild_id}/channels")
+    # type 0 = text channel, 5 = announcement, 15 = forum
+    text_types = {0, 5, 15}
+    results = []
+    for ch in data:
+        if ch.get("type") in text_types:
+            results.append(
+                {
+                    "id": ch["id"],
+                    "name": ch["name"],
+                    "type": ch.get("type", 0),
+                    "position": ch.get("position", 0),
+                    "parent_id": ch.get("parent_id"),
+                    "topic": ch.get("topic"),
+                }
+            )
+    return sorted(results, key=lambda x: x["position"])
+
+
+async def fetch_messages(
+    client: httpx.AsyncClient,
+    channel_id: str,
+    *,
+    limit: int = 1000,
+    after: str | None = None,
+    before: str | None = None,
+) -> list[dict]:
+    """Fetch messages from a channel, handling pagination.
+
+    Discord returns max 100 messages per request, so we paginate.
+    """
+    all_messages: list[dict] = []
+    remaining = limit
+
+    while remaining > 0:
+        batch_limit = min(remaining, 100)
+        params: dict[str, Any] = {"limit": batch_limit}
+        if after:
+            params["after"] = after
+
+        data = await _get(client, f"/channels/{channel_id}/messages", **params)
+
+        if not data:
+            break
+
+        for msg in data:
+            all_messages.append(_parse_message(msg, channel_id))
+
+        remaining -= len(data)
+
+        if len(data) < batch_limit:
+            break
+
+        # For pagination with 'after', we need to use the latest message ID.
+        # Discord returns messages newest first, so the last item is the oldest.
+        # When using 'after', we want to get messages AFTER a snowflake,
+        # and they come back newest-first. We move 'after' to the newest we've seen.
+        if after is not None:
+            # 'after' mode: messages come newest first, move forward
+            after = data[0]["id"]
+        else:
+            # Default: newest first, use 'before' to paginate backward
+            before = data[-1]["id"]
+            params.pop("after", None)
+            # Re-set for next iteration: we need to use 'before' instead
+            after = None
+
+        # Small delay to be nice
+        await asyncio.sleep(0.5)
+
+    # Sort by timestamp ascending
+    all_messages.sort(key=lambda m: m["msg_id"])
+    return all_messages
+
+
+def _parse_message(msg: dict, channel_id: str) -> dict:
+    """Parse a raw Discord message into our standard format."""
+    author = msg.get("author", {})
+    ts_str = msg.get("timestamp", "")
+    timestamp = datetime.fromisoformat(ts_str) if ts_str else datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+    # Build content: message text + any attachment URLs
+    content_parts = []
+    if msg.get("content"):
+        content_parts.append(msg["content"])
+    for att in msg.get("attachments", []):
+        content_parts.append(f"[attachment: {att.get('filename', 'file')}]")
+    for embed in msg.get("embeds", []):
+        if title := embed.get("title"):
+            content_parts.append(f"[embed: {title}]")
+
+    return {
+        "msg_id": msg["id"],
+        "channel_id": channel_id,
+        "sender_id": author.get("id"),
+        "sender_name": author.get("global_name") or author.get("username") or "Unknown",
+        "content": "\n".join(content_parts),
+        "timestamp": timestamp,
+    }
+
+
+async def get_guild_info(client: httpx.AsyncClient, guild_id: str) -> dict | None:
+    """Get detailed guild info."""
+    try:
+        data = await _get(client, f"/guilds/{guild_id}", with_counts="true")
+        return {
+            "id": data["id"],
+            "name": data["name"],
+            "description": data.get("description"),
+            "member_count": data.get("approximate_member_count"),
+            "online_count": data.get("approximate_presence_count"),
+        }
+    except Exception:
+        return None
