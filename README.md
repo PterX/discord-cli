@@ -145,6 +145,12 @@ mkdir -p .agents/skills
 git clone git@github.com:jackwener/discord-cli.git .agents/skills/discord-cli
 ```
 
+### OpenClaw / ClawHub
+
+```bash
+clawhub install discord-cli
+```
+
 [中文文档](./README_CN.md)
 
 ## License
