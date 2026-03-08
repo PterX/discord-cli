@@ -23,19 +23,14 @@ def data_group():
 @click.option("--hours", type=int, help="Only export last N hours")
 def export(channel: str, fmt: str, output_file: str | None, hours: int | None):
     """Export messages from CHANNEL to text or JSON."""
-    db = MessageDB()
-    channel_id = db.resolve_channel_id(channel)
+    with MessageDB() as db:
+        channel_id = db.resolve_channel_id(channel)
 
-    if channel_id is None:
-        console.print(f"[red]Channel '{channel}' not found in database.[/red]")
-        db.close()
-        return
+        if channel_id is None:
+            console.print(f"[red]Channel '{channel}' not found in database.[/red]")
+            return
 
-    if hours:
         msgs = db.get_recent(channel_id=channel_id, hours=hours, limit=100000)
-    else:
-        msgs = db.get_recent(channel_id=channel_id, hours=None, limit=100000)
-    db.close()
 
     if not msgs:
         console.print(f"[yellow]No messages found for '{channel}'.[/yellow]")
@@ -65,22 +60,20 @@ def export(channel: str, fmt: str, output_file: str | None, hours: int | None):
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation")
 def purge(channel: str, yes: bool):
     """Delete all stored messages for CHANNEL."""
-    db = MessageDB()
-    channel_id = db.resolve_channel_id(channel)
+    with MessageDB() as db:
+        channel_id = db.resolve_channel_id(channel)
 
-    if channel_id is None:
-        console.print(f"[red]Channel '{channel}' not found in database.[/red]")
-        db.close()
-        return
-
-    if not yes:
-        count = db.count(channel_id)
-        if not click.confirm(f"Delete {count} messages from channel {channel_id}?"):
-            db.close()
+        if channel_id is None:
+            console.print(f"[red]Channel '{channel}' not found in database.[/red]")
             return
 
-    deleted = db.delete_channel(channel_id)
-    db.close()
+        if not yes:
+            count = db.count(channel_id)
+            if not click.confirm(f"Delete {count} messages from channel {channel_id}?"):
+                return
+
+        deleted = db.delete_channel(channel_id)
+
     console.print(f"[green]✓[/green] Deleted {deleted} messages")
 
 
@@ -92,19 +85,16 @@ def analyze(channel: str, hours: int, prompt: str | None):
     """Analyze channel messages with AI (Claude)."""
     from ..analyzer import analyze_messages
 
-    db = MessageDB()
-    channel_id = db.resolve_channel_id(channel)
+    with MessageDB() as db:
+        channel_id = db.resolve_channel_id(channel)
 
-    if channel_id is None:
-        console.print(f"[red]Channel '{channel}' not found.[/red]")
-        db.close()
-        return
+        if channel_id is None:
+            console.print(f"[red]Channel '{channel}' not found.[/red]")
+            return
 
-    channels = db.get_channels()
-    ch_name = next((c["channel_name"] for c in channels if c["channel_id"] == channel_id), channel)
-
-    msgs = db.get_recent(channel_id=channel_id, hours=hours)
-    db.close()
+        channels = db.get_channels()
+        ch_name = next((c["channel_name"] for c in channels if c["channel_id"] == channel_id), channel)
+        msgs = db.get_recent(channel_id=channel_id, hours=hours)
 
     if not msgs:
         console.print(f"[yellow]No messages in last {hours}h.[/yellow]")
@@ -124,16 +114,12 @@ def summary(channel: str | None, hours: int | None):
 
     from ..analyzer import analyze_messages
 
-    db = MessageDB()
-
-    if hours:
+    with MessageDB() as db:
         channel_id = db.resolve_channel_id(channel) if channel else None
-        msgs = db.get_recent(channel_id=channel_id, hours=hours)
-    else:
-        channel_id = db.resolve_channel_id(channel) if channel else None
-        msgs = db.get_today(channel_id=channel_id)
-
-    db.close()
+        if hours:
+            msgs = db.get_recent(channel_id=channel_id, hours=hours)
+        else:
+            msgs = db.get_today(channel_id=channel_id)
 
     if not msgs:
         console.print("[yellow]No messages to summarize.[/yellow]")
@@ -144,15 +130,6 @@ def summary(channel: str | None, hours: int | None):
         grouped[m.get("channel_name") or "Unknown"].append(m)
 
     console.print(f"[dim]Summarizing {len(msgs)} messages from {len(grouped)} channels...[/dim]")
-
-    parts = []
-    for ch_name, ch_msgs in sorted(grouped.items(), key=lambda x: -len(x[1])):
-        parts.append(f"\n### #{ch_name} ({len(ch_msgs)} 条)")
-        for m in ch_msgs:
-            ts = (m.get("timestamp") or "")[:19]
-            sender = m.get("sender_name") or "Unknown"
-            content = m.get("content") or ""
-            parts.append(f"[{ts}] {sender}: {content}")
 
     combined_prompt = f"""请总结以下 {len(grouped)} 个 Discord 频道的消息：
 

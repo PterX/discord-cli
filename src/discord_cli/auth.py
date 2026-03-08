@@ -17,9 +17,6 @@ _TOKEN_PATTERNS = [
     re.compile(r'mfa\.[\w-]{84}'),
 ]
 
-# Encrypted token pattern (Discord client stores dQw4w9WgXcQ: encrypted)
-_ENCRYPTED_TOKEN_PATTERN = re.compile(r'dQw4w9WgXcQ:([^\s"]+)')
-
 
 def _get_search_paths() -> list[tuple[str, Path]]:
     """Return list of (source_name, leveldb_path) to search for tokens."""

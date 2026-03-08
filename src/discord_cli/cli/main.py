@@ -12,7 +12,7 @@ console = Console()
 
 
 @click.group()
-@click.version_option(package_name="discord-cli")
+@click.version_option(package_name="kabi-discord-cli")
 def cli():
     """discord — CLI for fetching Discord chat history and searching messages."""
     pass

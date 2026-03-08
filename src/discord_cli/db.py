@@ -92,7 +92,10 @@ class MessageDB:
             return 0
 
     def resolve_channel_id(self, channel_str: str) -> str | None:
-        """Resolve a channel string (name or ID) to a database channel_id."""
+        """Resolve a channel string (name or ID) to a database channel_id.
+
+        Returns None if not found in the database.
+        """
         channels = self.get_channels()
 
         # Try name match first
@@ -100,12 +103,16 @@ class MessageDB:
             if c["channel_name"] and channel_str.lower() in c["channel_name"].lower():
                 return c["channel_id"]
 
-        # Try raw ID
+        # Try raw ID match
         for c in channels:
             if c["channel_id"] == channel_str:
                 return c["channel_id"]
 
-        return channel_str  # Return as-is, might be a valid ID
+        # If input looks like a snowflake ID, pass through
+        if channel_str.isdigit() and len(channel_str) > 15:
+            return channel_str
+
+        return None
 
     def search(
         self,

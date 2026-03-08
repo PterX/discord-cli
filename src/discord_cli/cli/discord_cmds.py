@@ -15,6 +15,7 @@ from ..client import (
     list_channels,
     list_guilds,
     list_members,
+    resolve_guild_id,
     search_guild_messages,
 )
 from ..db import MessageDB
@@ -63,19 +64,10 @@ def dc_channels(guild: str, as_json: bool):
 
     async def _run():
         async with get_client() as client:
-            guild_id = guild
-            if not guild.isdigit():
-                guilds = await list_guilds(client)
-                match = next(
-                    (g for g in guilds if guild.lower() in g["name"].lower()),
-                    None,
-                )
-                if not match:
-                    console.print(f"[red]Guild '{guild}' not found.[/red]")
-                    return []
-                guild_id = match["id"]
-                console.print(f"[dim]Resolved to: {match['name']} ({guild_id})[/dim]")
-
+            guild_id = await resolve_guild_id(client, guild)
+            if not guild_id:
+                console.print(f"[red]Guild '{guild}' not found.[/red]")
+                return []
             return await list_channels(client, guild_id)
 
     channels = asyncio.run(_run())
@@ -107,8 +99,7 @@ def dc_history(channel: str, limit: int, guild_name: str | None, channel_name: s
     """Fetch historical messages from CHANNEL (channel ID)."""
 
     async def _run():
-        db = MessageDB()
-        try:
+        with MessageDB() as db:
             async with get_client() as client:
                 ch_name = channel_name
                 g_name = guild_name
@@ -141,8 +132,6 @@ def dc_history(channel: str, limit: int, guild_name: str | None, channel_name: s
 
                 inserted = db.insert_batch(messages)
                 return len(messages), inserted
-        finally:
-            db.close()
 
     total, inserted = asyncio.run(_run())
     console.print(f"\n[green]✓[/green] Fetched {total} messages, stored {inserted} new")
@@ -153,13 +142,13 @@ def dc_history(channel: str, limit: int, guild_name: str | None, channel_name: s
 @click.option("-n", "--limit", default=5000, help="Max messages per sync")
 def dc_sync(channel: str, limit: int):
     """Incremental sync — fetch only new messages from CHANNEL."""
-    db = MessageDB()
-    last_id = db.get_last_msg_id(channel)
-    if last_id:
-        console.print(f"Syncing from msg_id > {last_id}...")
 
     async def _run():
-        try:
+        with MessageDB() as db:
+            last_id = db.get_last_msg_id(channel)
+            if last_id:
+                console.print(f"Syncing from msg_id > {last_id}...")
+
             async with get_client() as client:
                 ch_name = None
                 g_name = None
@@ -190,8 +179,6 @@ def dc_sync(channel: str, limit: int):
 
                 inserted = db.insert_batch(messages)
                 return len(messages), inserted
-        finally:
-            db.close()
 
     total, inserted = asyncio.run(_run())
     console.print(f"\n[green]✓[/green] Synced {total} messages, stored {inserted} new")
@@ -201,17 +188,16 @@ def dc_sync(channel: str, limit: int):
 @click.option("-n", "--limit", default=5000, help="Max messages per channel")
 def dc_sync_all(limit: int):
     """Sync ALL channels in the database."""
-    db = MessageDB()
-    channels = db.get_channels()
-    if not channels:
-        console.print("[yellow]No channels in database. Run 'discord dc history' first.[/yellow]")
-        db.close()
-        return
-
-    console.print(f"Syncing {len(channels)} channels...")
 
     async def _run():
-        try:
+        with MessageDB() as db:
+            channels = db.get_channels()
+            if not channels:
+                console.print("[yellow]No channels in database. Run 'discord dc history' first.[/yellow]")
+                return {}
+
+            console.print(f"Syncing {len(channels)} channels...")
+
             async with get_client() as client:
                 results: dict[str, int] = {}
                 for ch in channels:
@@ -233,8 +219,6 @@ def dc_sync_all(limit: int):
                         console.print(f"  [red]✗ {ch_name}: {e}[/red]")
                         results[ch_name] = 0
                 return results
-        finally:
-            db.close()
 
     results = asyncio.run(_run())
     total_new = sum(results.values())
@@ -252,17 +236,10 @@ def dc_search(guild: str, keyword: str, channel: str | None, limit: int, as_json
 
     async def _run():
         async with get_client() as client:
-            guild_id = guild
-            if not guild.isdigit():
-                guilds = await list_guilds(client)
-                match = next(
-                    (g for g in guilds if guild.lower() in g["name"].lower()),
-                    None,
-                )
-                if not match:
-                    console.print(f"[red]Guild '{guild}' not found.[/red]")
-                    return []
-                guild_id = match["id"]
+            guild_id = await resolve_guild_id(client, guild)
+            if not guild_id:
+                console.print(f"[red]Guild '{guild}' not found.[/red]")
+                return []
             return await search_guild_messages(client, guild_id, keyword, channel_id=channel, limit=limit)
 
     results = asyncio.run(_run())
@@ -293,17 +270,10 @@ def dc_members(guild: str, limit: int, as_json: bool):
 
     async def _run():
         async with get_client() as client:
-            guild_id = guild
-            if not guild.isdigit():
-                guilds = await list_guilds(client)
-                match = next(
-                    (g for g in guilds if guild.lower() in g["name"].lower()),
-                    None,
-                )
-                if not match:
-                    console.print(f"[red]Guild '{guild}' not found.[/red]")
-                    return []
-                guild_id = match["id"]
+            guild_id = await resolve_guild_id(client, guild)
+            if not guild_id:
+                console.print(f"[red]Guild '{guild}' not found.[/red]")
+                return []
             return await list_members(client, guild_id, limit=limit)
 
     members = asyncio.run(_run())
@@ -344,7 +314,10 @@ def dc_info(guild: str, as_json: bool):
 
     async def _run():
         async with get_client() as client:
-            return await get_guild_info(client, guild)
+            guild_id = await resolve_guild_id(client, guild)
+            if not guild_id:
+                return None
+            return await get_guild_info(client, guild_id)
 
     info = asyncio.run(_run())
     if not info:

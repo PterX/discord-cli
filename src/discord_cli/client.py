@@ -82,6 +82,21 @@ async def list_guilds(client: httpx.AsyncClient) -> list[dict]:
     ]
 
 
+async def resolve_guild_id(client: httpx.AsyncClient, guild: str) -> str | None:
+    """Resolve a guild name or ID string to a guild ID.
+
+    Returns the guild ID if found, or None if not.
+    """
+    if guild.isdigit():
+        return guild
+    guilds = await list_guilds(client)
+    match = next(
+        (g for g in guilds if guild.lower() in g["name"].lower()),
+        None,
+    )
+    return match["id"] if match else None
+
+
 async def list_channels(client: httpx.AsyncClient, guild_id: str) -> list[dict]:
     """List all text channels in a guild."""
     data = await _get(client, f"/guilds/{guild_id}/channels")
@@ -114,15 +129,22 @@ async def fetch_messages(
     """Fetch messages from a channel, handling pagination.
 
     Discord returns max 100 messages per request, so we paginate.
+    Two modes:
+      - after mode: fetch messages newer than `after` ID (incremental sync)
+      - before/default mode: fetch messages older-ward (history fetch)
     """
     all_messages: list[dict] = []
     remaining = limit
+    use_after = after is not None
 
     while remaining > 0:
         batch_limit = min(remaining, 100)
         params: dict[str, Any] = {"limit": batch_limit}
-        if after:
+
+        if use_after:
             params["after"] = after
+        elif before:
+            params["before"] = before
 
         data = await _get(client, f"/channels/{channel_id}/messages", **params)
 
@@ -137,19 +159,13 @@ async def fetch_messages(
         if len(data) < batch_limit:
             break
 
-        # For pagination with 'after', we need to use the latest message ID.
-        # Discord returns messages newest first, so the last item is the oldest.
-        # When using 'after', we want to get messages AFTER a snowflake,
-        # and they come back newest-first. We move 'after' to the newest we've seen.
-        if after is not None:
-            # 'after' mode: messages come newest first, move forward
+        # Discord always returns messages newest-first.
+        if use_after:
+            # 'after' mode: move cursor to the newest message we've seen
             after = data[0]["id"]
         else:
-            # Default: newest first, use 'before' to paginate backward
+            # 'before'/default mode: move cursor to the oldest message we've seen
             before = data[-1]["id"]
-            params.pop("after", None)
-            # Re-set for next iteration: we need to use 'before' instead
-            after = None
 
         # Small delay to be nice
         await asyncio.sleep(0.5)

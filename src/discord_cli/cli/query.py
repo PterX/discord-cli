@@ -25,10 +25,9 @@ def query_group():
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def search(keyword: str, channel: str | None, limit: int, as_json: bool):
     """Search stored messages by KEYWORD."""
-    db = MessageDB()
-    channel_id = db.resolve_channel_id(channel) if channel else None
-    results = db.search(keyword, channel_id=channel_id, limit=limit)
-    db.close()
+    with MessageDB() as db:
+        channel_id = db.resolve_channel_id(channel) if channel else None
+        results = db.search(keyword, channel_id=channel_id, limit=limit)
 
     if not results:
         console.print("[yellow]No messages found.[/yellow]")
@@ -55,10 +54,9 @@ def search(keyword: str, channel: str | None, limit: int, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def stats(as_json: bool):
     """Show message statistics per channel."""
-    db = MessageDB()
-    channels = db.get_channels()
-    total = db.count()
-    db.close()
+    with MessageDB() as db:
+        channels = db.get_channels()
+        total = db.count()
 
     if as_json:
         console.print(json_mod.dumps({"total": total, "channels": channels}, ensure_ascii=False, indent=2, default=str))
@@ -91,10 +89,9 @@ def stats(as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def today(channel: str | None, as_json: bool):
     """Show today's messages, grouped by channel."""
-    db = MessageDB()
-    channel_id = db.resolve_channel_id(channel) if channel else None
-    msgs = db.get_today(channel_id=channel_id)
-    db.close()
+    with MessageDB() as db:
+        channel_id = db.resolve_channel_id(channel) if channel else None
+        msgs = db.get_today(channel_id=channel_id)
 
     if not msgs:
         console.print("[yellow]No messages today.[/yellow]")
@@ -129,10 +126,9 @@ def today(channel: str | None, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def top(channel: str | None, hours: int | None, limit: int, as_json: bool):
     """Show most active senders."""
-    db = MessageDB()
-    channel_id = db.resolve_channel_id(channel) if channel else None
-    results = db.top_senders(channel_id=channel_id, hours=hours, limit=limit)
-    db.close()
+    with MessageDB() as db:
+        channel_id = db.resolve_channel_id(channel) if channel else None
+        results = db.top_senders(channel_id=channel_id, hours=hours, limit=limit)
 
     if not results:
         console.print("[yellow]No sender data found.[/yellow]")
@@ -167,10 +163,9 @@ def top(channel: str | None, hours: int | None, limit: int, as_json: bool):
 @click.option("--by", "granularity", type=click.Choice(["day", "hour"]), default="day")
 def timeline(channel: str | None, hours: int | None, granularity: str):
     """Show message activity over time as a bar chart."""
-    db = MessageDB()
-    channel_id = db.resolve_channel_id(channel) if channel else None
-    results = db.timeline(channel_id=channel_id, hours=hours, granularity=granularity)
-    db.close()
+    with MessageDB() as db:
+        channel_id = db.resolve_channel_id(channel) if channel else None
+        results = db.timeline(channel_id=channel_id, hours=hours, granularity=granularity)
 
     if not results:
         console.print("[yellow]No timeline data.[/yellow]")
