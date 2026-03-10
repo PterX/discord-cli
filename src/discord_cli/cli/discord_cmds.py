@@ -159,7 +159,8 @@ def dc_channels(guild: str, as_json: bool, as_yaml: bool):
 @click.option("-n", "--limit", default=1000, help="Max messages to fetch")
 @click.option("--guild-name", help="Guild name to store with messages")
 @click.option("--channel-name", help="Channel name to store with messages")
-def dc_history(channel: str, limit: int, guild_name: str | None, channel_name: str | None):
+@structured_output_options
+def dc_history(channel: str, limit: int, guild_name: str | None, channel_name: str | None, as_json: bool, as_yaml: bool):
     """Fetch historical messages from CHANNEL (channel ID)."""
 
     async def _run():
@@ -192,13 +193,17 @@ def dc_history(channel: str, limit: int, guild_name: str | None, channel_name: s
                 return len(messages), inserted
 
     total, inserted = asyncio.run(_run())
+    payload = {"fetched": total, "stored": inserted}
+    if emit_structured(payload, as_json=as_json, as_yaml=as_yaml):
+        return
     console.print(f"\n[green]✓[/green] Fetched {total} messages, stored {inserted} new")
 
 
 @discord_group.command("sync")
 @click.argument("channel")
 @click.option("-n", "--limit", default=5000, help="Max messages per sync")
-def dc_sync(channel: str, limit: int):
+@structured_output_options
+def dc_sync(channel: str, limit: int, as_json: bool, as_yaml: bool):
     """Incremental sync — fetch only new messages from CHANNEL."""
 
     async def _run():
@@ -228,6 +233,9 @@ def dc_sync(channel: str, limit: int):
                 return len(messages), inserted
 
     total, inserted = asyncio.run(_run())
+    payload = {"fetched": total, "stored": inserted}
+    if emit_structured(payload, as_json=as_json, as_yaml=as_yaml):
+        return
     console.print(f"\n[green]✓[/green] Synced {total} messages, stored {inserted} new")
 
 

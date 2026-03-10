@@ -117,10 +117,11 @@ def status(as_json: bool, as_yaml: bool):
     import httpx
 
     from ..config import get_token
+    from ..exceptions import NotAuthenticatedError
 
     try:
         token = get_token()
-    except RuntimeError as e:
+    except NotAuthenticatedError as e:
         if emit_structured(
             error_payload("not_authenticated", str(e)),
             as_json=as_json,

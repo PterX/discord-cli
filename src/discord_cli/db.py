@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 
 from .config import get_db_path
+
+log = logging.getLogger(__name__)
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -122,7 +125,8 @@ class MessageDB:
             )
             self.conn.commit()
             return self.conn.total_changes - before
-        except sqlite3.Error:
+        except sqlite3.Error as e:
+            log.warning("insert_batch failed: %s", e)
             return 0
 
     def resolve_channel_id(self, channel_str: str) -> str | None:

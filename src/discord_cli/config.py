@@ -48,11 +48,20 @@ _load_env()
 APP_NAME = "discord-cli"
 API_BASE = "https://discord.com/api/v10"
 
+CHROME_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/133.0.0.0 Safari/537.36"
+)
+SEC_CH_UA = '"Chromium";v="133", "Not(A:Brand";v="99", "Google Chrome";v="133"'
+
 
 def get_token() -> str:
     val = os.environ.get("DISCORD_TOKEN", "")
     if not val:
-        raise RuntimeError(
+        from .exceptions import NotAuthenticatedError
+
+        raise NotAuthenticatedError(
             "DISCORD_TOKEN not set. Get it from browser DevTools → "
             "Network tab → any Discord request → Authorization header."
         )

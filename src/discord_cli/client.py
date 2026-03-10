@@ -10,7 +10,8 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
-from .config import API_BASE, get_token
+from .config import API_BASE, CHROME_UA, SEC_CH_UA, get_token
+from .exceptions import RateLimitError
 
 # Discord epoch: 2015-01-01T00:00:00Z
 DISCORD_EPOCH = 1420070400000
@@ -37,12 +38,8 @@ async def get_client() -> AsyncGenerator[httpx.AsyncClient, None]:
         headers={
             "Authorization": token,
             "Content-Type": "application/json",
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/133.0.0.0 Safari/537.36"
-            ),
-            "sec-ch-ua": '"Chromium";v="133", "Not(A:Brand";v="99", "Google Chrome";v="133"',
+            "User-Agent": CHROME_UA,
+            "sec-ch-ua": SEC_CH_UA,
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": '"macOS"',
         },
@@ -73,7 +70,7 @@ async def _get(client: httpx.AsyncClient, path: str, **params: Any) -> Any:
         await _handle_rate_limit(response)
         response.raise_for_status()
         return response.json()
-    raise RuntimeError(f"Rate limited after 3 retries: {path}")
+    raise RateLimitError(f"Rate limited after 3 retries: {path}")
 
 
 async def list_guilds(client: httpx.AsyncClient) -> list[dict]:
@@ -222,7 +219,7 @@ async def get_guild_info(client: httpx.AsyncClient, guild_id: str) -> dict | Non
             "member_count": data.get("approximate_member_count"),
             "online_count": data.get("approximate_presence_count"),
         }
-    except Exception:
+    except (httpx.HTTPError, KeyError, ValueError):
         return None
 
 
@@ -253,7 +250,7 @@ async def get_user(client: httpx.AsyncClient, user_id: str) -> dict | None:
             "bot": data.get("bot", False),
             "created_at": snowflake_to_datetime(data["id"]).isoformat(),
         }
-    except Exception:
+    except (httpx.HTTPError, KeyError, ValueError):
         return None
 
 
