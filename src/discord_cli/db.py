@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,40 @@ CREATE INDEX IF NOT EXISTS idx_messages_content ON messages(content);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_name);
 CREATE INDEX IF NOT EXISTS idx_messages_guild ON messages(guild_id);
 """
+
+
+class ChannelResolutionError(ValueError):
+    """Base error for channel lookup failures."""
+
+
+class ChannelNotFoundError(ChannelResolutionError):
+    """Raised when a channel cannot be found in local storage."""
+
+    def __init__(self, query: str):
+        super().__init__(f"Channel '{query}' not found in database.")
+
+
+class AmbiguousChannelError(ChannelResolutionError):
+    """Raised when a channel query matches multiple stored channels."""
+
+    def __init__(self, query: str, matches: list[dict]):
+        preview = ", ".join(_format_channel_match(match) for match in matches[:5])
+        if len(matches) > 5:
+            preview += ", ..."
+        super().__init__(
+            f"Channel '{query}' is ambiguous. Matches: {preview}. "
+            "Use a more specific name or a channel ID."
+        )
+        self.matches = matches
+
+
+def _format_channel_match(channel: dict) -> str:
+    """Format a channel record for error messages."""
+    name = channel.get("channel_name") or channel.get("channel_id") or "unknown"
+    guild = channel.get("guild_name")
+    if guild:
+        return f"{guild} > #{name} ({channel['channel_id']})"
+    return f"#{name} ({channel['channel_id']})"
 
 
 class MessageDB:
@@ -96,23 +130,42 @@ class MessageDB:
 
         Returns None if not found in the database.
         """
+        try:
+            return self.resolve_channel(channel_str)["channel_id"]
+        except ChannelResolutionError:
+            return None
+
+    def find_channels(self, channel_str: str) -> list[dict]:
+        """Find candidate stored channels by ID, exact name, or partial name."""
         channels = self.get_channels()
+        query = channel_str.lower()
 
-        # Try name match first
-        for c in channels:
-            if c["channel_name"] and channel_str.lower() in c["channel_name"].lower():
-                return c["channel_id"]
+        exact_id_matches = [c for c in channels if c["channel_id"] == channel_str]
+        if exact_id_matches:
+            return exact_id_matches
 
-        # Try raw ID match
-        for c in channels:
-            if c["channel_id"] == channel_str:
-                return c["channel_id"]
+        exact_name_matches = [
+            c
+            for c in channels
+            if c.get("channel_name") and c["channel_name"].lower() == query
+        ]
+        if exact_name_matches:
+            return exact_name_matches
 
-        # If input looks like a snowflake ID, pass through
-        if channel_str.isdigit() and len(channel_str) > 15:
-            return channel_str
+        return [
+            c
+            for c in channels
+            if c.get("channel_name") and query in c["channel_name"].lower()
+        ]
 
-        return None
+    def resolve_channel(self, channel_str: str) -> dict:
+        """Resolve a stored channel, rejecting missing or ambiguous matches."""
+        matches = self.find_channels(channel_str)
+        if not matches:
+            raise ChannelNotFoundError(channel_str)
+        if len(matches) > 1:
+            raise AmbiguousChannelError(channel_str, matches)
+        return matches[0]
 
     def search(
         self,
@@ -137,7 +190,7 @@ class MessageDB:
         hours: int | None = 24,
         limit: int = 500,
     ) -> list[dict]:
-        """Get recent messages. If hours is None, return all."""
+        """Get recent messages in chronological order."""
         if hours is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
             query = "SELECT * FROM messages WHERE timestamp >= ?"
@@ -148,20 +201,42 @@ class MessageDB:
         if channel_id:
             query += " AND channel_id = ?"
             params.append(channel_id)
-        query += " ORDER BY timestamp ASC LIMIT ?"
+        query += " ORDER BY timestamp DESC LIMIT ?"
         params.append(limit)
         rows = self.conn.execute(query, params).fetchall()
-        return [dict(r) for r in rows]
+        return [dict(r) for r in reversed(rows)]
+
+    def get_latest(
+        self,
+        channel_id: str | None = None,
+        hours: int | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Get the most recent messages, returned in chronological order."""
+        query = "SELECT * FROM messages WHERE 1=1"
+        params: list[Any] = []
+        if channel_id:
+            query += " AND channel_id = ?"
+            params.append(channel_id)
+        if hours is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+            query += " AND timestamp >= ?"
+            params.append(cutoff)
+        query += " ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+        rows = self.conn.execute(query, params).fetchall()
+        return [dict(r) for r in reversed(rows)]
 
     def get_today(
         self,
         channel_id: str | None = None,
-        tz_offset_hours: int = 8,
+        tz: tzinfo | None = None,
         limit: int = 5000,
+        now: datetime | None = None,
     ) -> list[dict]:
         """Get today's messages (in local timezone)."""
-        now_utc = datetime.now(timezone.utc)
-        local_tz = timezone(timedelta(hours=tz_offset_hours))
+        now_utc = now.astimezone(timezone.utc) if now else datetime.now(timezone.utc)
+        local_tz = tz or datetime.now().astimezone().tzinfo or timezone.utc
         today_local = now_utc.astimezone(local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
         cutoff_utc = today_local.astimezone(timezone.utc).isoformat()
 
@@ -230,10 +305,12 @@ class MessageDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"""SELECT sender_name, sender_id, COUNT(*) as msg_count,
+            f"""SELECT COALESCE(MAX(sender_name), 'Unknown') as sender_name,
+                       sender_id,
+                       COUNT(*) as msg_count,
                        MIN(timestamp) as first_msg, MAX(timestamp) as last_msg
                 FROM messages WHERE {where}
-                GROUP BY sender_name
+                GROUP BY COALESCE(sender_id, sender_name)
                 ORDER BY msg_count DESC
                 LIMIT ?""",
             params + [limit],

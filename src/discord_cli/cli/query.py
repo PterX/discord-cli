@@ -7,6 +7,7 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from ._channels import resolve_channel_id_or_raise
 from ..db import MessageDB
 
 console = Console(stderr=True)
@@ -26,7 +27,7 @@ def query_group():
 def search(keyword: str, channel: str | None, limit: int, as_json: bool):
     """Search stored messages by KEYWORD."""
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel) if channel else None
+        channel_id = resolve_channel_id_or_raise(db, channel) if channel else None
         results = db.search(keyword, channel_id=channel_id, limit=limit)
 
     if not results:
@@ -48,6 +49,37 @@ def search(keyword: str, channel: str | None, limit: int, as_json: bool):
         )
 
     console.print(f"\n[dim]Found {len(results)} messages[/dim]")
+
+
+@query_group.command("recent")
+@click.option("-c", "--channel", help="Filter by channel name")
+@click.option("--hours", type=int, help="Only show messages from last N hours")
+@click.option("-n", "--limit", default=50, help="Show last N messages")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def recent(channel: str | None, hours: int | None, limit: int, as_json: bool):
+    """Show the most recent stored messages."""
+    with MessageDB() as db:
+        channel_id = resolve_channel_id_or_raise(db, channel) if channel else None
+        results = db.get_latest(channel_id=channel_id, hours=hours, limit=limit)
+
+    if not results:
+        console.print("[yellow]No recent messages found.[/yellow]")
+        return
+
+    if as_json:
+        click.echo(json_mod.dumps(results, ensure_ascii=False, indent=2, default=str))
+        return
+
+    show_channel = channel_id is None
+    for msg in results:
+        ts = (msg.get("timestamp") or "")[:19]
+        sender = msg.get("sender_name") or "Unknown"
+        ch_name = msg.get("channel_name") or ""
+        content = (msg.get("content") or "")[:200].replace("\n", " ")
+        prefix = f"[cyan]#{ch_name}[/cyan] | " if show_channel and ch_name else ""
+        console.print(f"[dim]{ts}[/dim] {prefix}[bold]{sender}[/bold]: {content}")
+
+    console.print(f"\n[dim]Showing {len(results)} recent messages[/dim]")
 
 
 @query_group.command("stats")
@@ -90,7 +122,7 @@ def stats(as_json: bool):
 def today(channel: str | None, as_json: bool):
     """Show today's messages, grouped by channel."""
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel) if channel else None
+        channel_id = resolve_channel_id_or_raise(db, channel) if channel else None
         msgs = db.get_today(channel_id=channel_id)
 
     if not msgs:
@@ -127,7 +159,7 @@ def today(channel: str | None, as_json: bool):
 def top(channel: str | None, hours: int | None, limit: int, as_json: bool):
     """Show most active senders."""
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel) if channel else None
+        channel_id = resolve_channel_id_or_raise(db, channel) if channel else None
         results = db.top_senders(channel_id=channel_id, hours=hours, limit=limit)
 
     if not results:
@@ -161,14 +193,19 @@ def top(channel: str | None, hours: int | None, limit: int, as_json: bool):
 @click.option("-c", "--channel", help="Filter by channel name")
 @click.option("--hours", type=int, help="Only show last N hours")
 @click.option("--by", "granularity", type=click.Choice(["day", "hour"]), default="day")
-def timeline(channel: str | None, hours: int | None, granularity: str):
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def timeline(channel: str | None, hours: int | None, granularity: str, as_json: bool):
     """Show message activity over time as a bar chart."""
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel) if channel else None
+        channel_id = resolve_channel_id_or_raise(db, channel) if channel else None
         results = db.timeline(channel_id=channel_id, hours=hours, granularity=granularity)
 
     if not results:
         console.print("[yellow]No timeline data.[/yellow]")
+        return
+
+    if as_json:
+        click.echo(json_mod.dumps(results, ensure_ascii=False, indent=2, default=str))
         return
 
     max_count = max(r["msg_count"] for r in results)

@@ -1,68 +1,75 @@
 # discord-cli
 
-[![PyPI version](https://img.shields.io/pypi/v/kabi-discord-cli.svg)](https://pypi.org/project/kabi-discord-cli/)
-[![Python versions](https://img.shields.io/pypi/pyversions/kabi-discord-cli.svg)](https://pypi.org/project/kabi-discord-cli/)
+[![CI](https://github.com/jackwener/discord-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwener/discord-cli/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/kabi_discord_cli.svg)](https://pypi.org/project/kabi-discord-cli/)
+[![Python versions](https://img.shields.io/pypi/pyversions/kabi_discord_cli.svg)](https://pypi.org/project/kabi-discord-cli/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
 
-Discord CLI — fetch chat history, search messages, daily sync, AI analysis. Uses Discord HTTP API with user token (read-only).
+[中文](./README_CN.md)
 
-## More Projects
+Telethon-style local-first tooling for Discord: sync messages into SQLite, search them from the terminal, export structured results, and feed them to AI agents.
 
-- [twitter-cli](https://github.com/jackwener/twitter-cli) — Twitter/X CLI
-- [bilibili-cli](https://github.com/jackwener/bilibili-cli) — Bilibili CLI
-- [xhs-cli](https://github.com/jackwener/xhs-cli) — Xiaohongshu CLI
+discord-cli uses the Discord HTTP API with a **user token** from your local session. It is meant for accounts you control, on machines you control.
 
+## Warning
 
+- discord-cli reads a Discord **user token** from your local Discord/browser session.
+- Discord may restrict or suspend accounts that automate user-token traffic.
+- Use it only on your own account and only if you understand the risk.
 
 ## Features
 
-- 🔐 **Auth** — auto-extract token from browser/Discord client, status check, whoami
-- 🏠 **Servers** — list guilds, channels, members, server info
-- 📜 **History** — fetch and store message history in SQLite
-- 🔄 **Sync** — incremental sync, bulk sync-all channels
-- 🔍 **Search** — native Discord search + local keyword search
-- 📊 **Analytics** — stats, top senders, timeline chart
-- 📅 **Today** — view today's messages grouped by channel
-- 🤖 **AI** — Claude-powered analyze and summary
-- 📤 **Export** — text or JSON output for scripting
-- 📊 **JSON output** — all query commands support `--json`
+- Local-first SQLite storage for history, sync, search, export, and analytics
+- `discord dc sync-all` discovers accessible text channels and bootstraps from the API
+- Query commands support `--json` for scripting and agents
+- `timeline --json` for machine-readable activity data
+- Optional Claude-powered `analyze` and `summary`
+- Safer local channel resolution for `search`, `recent`, `today`, `export`, and `purge`
 
 ## Installation
 
 ```bash
-# From PyPI
+# PyPI
 uv tool install kabi-discord-cli
 # or
 pipx install kabi-discord-cli
 
+# With AI commands
+uv tool install 'kabi-discord-cli[ai]'
+
+# From GitHub
+uv tool install git+https://github.com/jackwener/discord-cli.git
+
 # From source
 git clone git@github.com:jackwener/discord-cli.git
 cd discord-cli
-uv sync
+uv sync --extra dev
 ```
+
+AI commands require the optional `ai` extra plus `ANTHROPIC_API_KEY`.
 
 ## Quick Start
 
 ```bash
-# Auto-extract and save token
+# Extract and save a token from your local Discord/browser session
 discord auth --save
 
-# Check login status
+# Verify auth
 discord status
 discord whoami
 
-# List servers and channels
+# Explore guilds and channels
 discord dc guilds
 discord dc channels <guild_id>
 
-# Fetch history
-discord dc history <channel_id> -n 1000
+# Bootstrap local storage
+discord dc sync-all -n 500
 
-# Incremental sync
-discord dc sync <channel_id>
-discord dc sync-all
-
-# Today's messages
+# Query local cache
 discord today
+discord recent -n 50
+discord search "rust" -c general --json
+discord timeline --by hour --json
 ```
 
 ## Commands
@@ -71,87 +78,83 @@ discord today
 
 | Command | Description |
 |---------|-------------|
-| `auth [--save]` | Extract token from browser/Discord client |
-| `status` | Check if token is valid (exit code 0/1) |
-| `whoami [--json]` | Detailed user profile |
+| `auth [--save]` | Extract a token from local Discord/browser session |
+| `status` | Check if the configured token is valid |
+| `whoami [--json]` | Show the current Discord profile |
 
-### Discord (`discord dc ...`)
-
-| Command | Description |
-|---------|-------------|
-| `dc guilds [--json]` | List joined servers |
-| `dc channels GUILD [--json]` | List text channels |
-| `dc history CHANNEL [-n 1000]` | Fetch historical messages |
-| `dc sync CHANNEL` | Incremental sync |
-| `dc sync-all` | Sync ALL channels in database |
-| `dc search GUILD KEYWORD [-c CH]` | Native Discord search |
-| `dc members GUILD [--max 50]` | List server members |
-| `dc info GUILD [--json]` | Show server info |
-
-### Query
+### Discord API (`discord dc ...`)
 
 | Command | Description |
 |---------|-------------|
-| `search KEYWORD [-c CH] [--json]` | Search stored messages |
+| `dc guilds [--json]` | List joined guilds |
+| `dc channels GUILD [--json]` | List text channels in a guild |
+| `dc history CHANNEL [-n 1000]` | Fetch message history for one channel |
+| `dc sync CHANNEL [-n 5000]` | Incrementally sync one channel |
+| `dc sync-all [-n 5000]` | Discover and sync accessible text channels |
+| `dc tail CHANNEL [--once]` | Poll and follow new messages like `tail -f` |
+| `dc search GUILD KEYWORD [-c CHANNEL_ID] [--json]` | Use Discord native search |
+| `dc members GUILD [--max 50] [--json]` | List guild members |
+| `dc info GUILD [--json]` | Show guild info |
+
+### Local Query
+
+| Command | Description |
+|---------|-------------|
+| `search KEYWORD [-c CHANNEL] [-n 50] [--json]` | Search locally stored messages |
+| `recent [-c CHANNEL] [--hours N] [-n 50] [--json]` | Show newest locally stored messages |
 | `stats [--json]` | Message statistics per channel |
-| `today [-c CH] [--json]` | Today's messages |
-| `top [-c CH] [--hours N] [--json]` | Most active senders |
-| `timeline [-c CH] [--by day\|hour]` | Activity bar chart |
+| `today [-c CHANNEL] [--json]` | Show today's messages |
+| `top [-c CHANNEL] [--hours N] [--json]` | Top senders |
+| `timeline [-c CHANNEL] [--hours N] [--by day\|hour] [--json]` | Activity timeline |
 
 ### Data & AI
 
 | Command | Description |
 |---------|-------------|
-| `export CHANNEL [-f text\|json] [-o FILE]` | Export messages |
-| `purge CHANNEL [-y]` | Delete stored messages |
-| `analyze CHANNEL [--hours 24] [-p PROMPT]` | AI analysis (Claude) |
-| `summary [-c CH] [--hours N]` | AI summary of today |
+| `export CHANNEL [-f text\|json] [-o FILE] [--hours N]` | Export stored messages |
+| `purge CHANNEL [-y]` | Delete stored messages for a channel |
+| `analyze CHANNEL [--hours 24] [-p PROMPT]` | Claude analysis for one channel |
+| `summary [-c CHANNEL] [--hours N]` | Claude summary across today or last N hours |
 
-## Authentication
+## Behavior Notes
 
-discord-cli auto-extracts token from:
-1. **Discord desktop client** — reads from local leveldb
-2. **Browsers** — Chrome, Edge, Brave local storage
+- Most top-level query commands read from local SQLite, not directly from Discord.
+- `discord dc sync-all` now bootstraps by discovering guilds and channels through the API, so it works on a fresh database.
+- Channel names are resolved against the local database. If a name matches multiple channels, the CLI will stop and ask you to use a more specific name or a channel ID.
 
-Token is validated against the API before saving. Run `discord auth --save` for one-click setup.
+## AI Usage
 
-## Architecture
-
-```
-src/discord_cli/
-├── cli/
-│   ├── main.py          # CLI entry + auth/status/whoami
-│   ├── discord_cmds.py  # guilds, channels, history, sync, search, members
-│   ├── query.py         # search, stats, today, top, timeline
-│   └── data.py          # export, purge, analyze, summary
-├── client.py            # httpx Discord API v10 with rate limiting
-├── config.py            # Env var / .env config
-├── db.py                # SQLite message store
-├── auth.py              # Token extraction from browser/client
-└── analyzer.py          # Claude AI analysis
-```
-
-Uses **httpx** (async HTTP) to call Discord REST API v10.
-Messages are stored in **SQLite** (`~/Library/Application Support/discord-cli/messages.db`).
-
-## Use as AI Agent Skill
-
-discord-cli ships with a [`SKILL.md`](./SKILL.md) for AI agent integration.
-
-### Claude Code / Antigravity
+Install AI support first:
 
 ```bash
-mkdir -p .agents/skills
-git clone git@github.com:jackwener/discord-cli.git .agents/skills/discord-cli
+uv sync --extra ai
+export ANTHROPIC_API_KEY=...
 ```
 
-### OpenClaw / ClawHub
+Then:
 
 ```bash
-clawhub install discord-cli
+discord analyze general --hours 24
+discord summary --hours 12
+discord search "release" --json
 ```
 
-[中文文档](./README_CN.md)
+discord-cli also ships with [SKILL.md](./SKILL.md) for agent integration.
+
+## Development
+
+```bash
+uv sync --extra dev --extra ai
+uv run ruff check .
+uv run python -m pytest
+uv build
+```
+
+## More Projects
+
+- [twitter-cli](https://github.com/jackwener/twitter-cli) — Twitter/X CLI
+- [bilibili-cli](https://github.com/jackwener/bilibili-cli) — Bilibili CLI
+- [xhs-cli](https://github.com/jackwener/xhs-cli) — Xiaohongshu CLI
 
 ## License
 

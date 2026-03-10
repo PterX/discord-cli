@@ -26,6 +26,11 @@ def auth(save: bool):
 
     from ..auth import find_tokens, save_token_to_env
 
+    console.print(
+        "[yellow]Warning:[/yellow] discord-cli uses a Discord user token from your local "
+        "session. This may violate Discord's terms or trigger account restrictions. "
+        "Use it only on accounts you control and at your own risk."
+    )
     console.print("[dim]Scanning for Discord tokens...[/dim]")
     results = find_tokens()
 

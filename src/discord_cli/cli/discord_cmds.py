@@ -2,6 +2,7 @@
 
 import asyncio
 import json as json_mod
+from contextlib import suppress
 
 import click
 from rich.console import Console
@@ -27,6 +28,69 @@ console = Console(stderr=True)
 def discord_group():
     """Discord operations — list servers, fetch history, sync."""
     pass
+
+
+async def _fetch_channel_context(client, channel_id: str) -> dict[str, str | None]:
+    """Resolve channel and guild names for a channel."""
+    channel_name = None
+    guild_name = None
+    guild_id = None
+
+    with suppress(Exception):
+        response = await client.get(f"/channels/{channel_id}")
+        if response.status_code == 200:
+            data = response.json()
+            channel_name = data.get("name")
+            guild_id = data.get("guild_id")
+            if guild_id:
+                guild = await get_guild_info(client, guild_id)
+                if guild:
+                    guild_name = guild.get("name")
+
+    return {
+        "channel_name": channel_name,
+        "guild_name": guild_name,
+        "guild_id": guild_id,
+    }
+
+
+def _annotate_messages(messages: list[dict], context: dict[str, str | None]) -> list[dict]:
+    """Attach channel and guild metadata to fetched messages."""
+    for msg in messages:
+        msg["guild_id"] = context.get("guild_id")
+        msg["guild_name"] = context.get("guild_name")
+        msg["channel_name"] = context.get("channel_name")
+    return messages
+
+
+def _format_message(msg: dict, *, include_channel: bool = False) -> str:
+    """Format a single message for console output."""
+    ts = str(msg.get("timestamp", ""))[:19]
+    sender = msg.get("sender_name") or "Unknown"
+    content = (msg.get("content") or "").replace("\n", " ")[:300]
+    channel_name = msg.get("channel_name") or ""
+    prefix = f"[cyan]#{channel_name}[/cyan] | " if include_channel and channel_name else ""
+    return f"[dim]{ts}[/dim] {prefix}[bold]{sender}[/bold]: {content}"
+
+
+async def _tail_fetch_once(
+    client,
+    db: MessageDB,
+    channel_id: str,
+    *,
+    after: str | None,
+    fetch_limit: int,
+    context: dict[str, str | None],
+    store: bool,
+) -> tuple[list[dict], str | None, int]:
+    """Fetch a single incremental batch for tail mode."""
+    messages = await fetch_messages(client, channel_id, limit=fetch_limit, after=after)
+    if not messages:
+        return [], after, 0
+
+    _annotate_messages(messages, context)
+    inserted = db.insert_batch(messages) if store else 0
+    return messages, messages[-1]["msg_id"], inserted
 
 
 @discord_group.command("guilds")
@@ -101,34 +165,28 @@ def dc_history(channel: str, limit: int, guild_name: str | None, channel_name: s
     async def _run():
         with MessageDB() as db:
             async with get_client() as client:
-                ch_name = channel_name
-                g_name = guild_name
+                context = await _fetch_channel_context(client, channel)
+                if channel_name:
+                    context["channel_name"] = channel_name
+                elif context.get("channel_name") is None:
+                    context["channel_name"] = channel
 
-                if not ch_name:
-                    try:
-                        ch_info = await client.get(f"/channels/{channel}")
-                        if ch_info.status_code == 200:
-                            ch_data = ch_info.json()
-                            ch_name = ch_data.get("name", channel)
-                            if not g_name and ch_data.get("guild_id"):
-                                g_info = await get_guild_info(client, ch_data["guild_id"])
-                                if g_info:
-                                    g_name = g_info["name"]
-                    except Exception:
-                        pass
+                if guild_name:
+                    context["guild_name"] = guild_name
 
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
                     console=console,
                 ) as progress:
-                    task = progress.add_task(f"Fetching messages from {ch_name or channel}...", total=None)
+                    task = progress.add_task(
+                        f"Fetching messages from {context.get('channel_name') or channel}...",
+                        total=None,
+                    )
                     messages = await fetch_messages(client, channel, limit=limit)
                     progress.update(task, description=f"Fetched {len(messages)} messages")
 
-                for msg in messages:
-                    msg["guild_name"] = g_name
-                    msg["channel_name"] = ch_name
+                _annotate_messages(messages, context)
 
                 inserted = db.insert_batch(messages)
                 return len(messages), inserted
@@ -150,38 +208,93 @@ def dc_sync(channel: str, limit: int):
                 console.print(f"Syncing from msg_id > {last_id}...")
 
             async with get_client() as client:
-                ch_name = None
-                g_name = None
-                try:
-                    ch_info = await client.get(f"/channels/{channel}")
-                    if ch_info.status_code == 200:
-                        ch_data = ch_info.json()
-                        ch_name = ch_data.get("name")
-                        if ch_data.get("guild_id"):
-                            g_info = await get_guild_info(client, ch_data["guild_id"])
-                            if g_info:
-                                g_name = g_info["name"]
-                except Exception:
-                    pass
+                context = await _fetch_channel_context(client, channel)
 
                 with Progress(
                     SpinnerColumn(),
                     TextColumn("[progress.description]{task.description}"),
                     console=console,
                 ) as progress:
-                    task_id = progress.add_task(f"Syncing {ch_name or channel}...", total=None)
+                    task_id = progress.add_task(
+                        f"Syncing {context.get('channel_name') or channel}...",
+                        total=None,
+                    )
                     messages = await fetch_messages(client, channel, limit=limit, after=last_id)
                     progress.update(task_id, description=f"Fetched {len(messages)} new messages")
 
-                for msg in messages:
-                    msg["guild_name"] = g_name
-                    msg["channel_name"] = ch_name
+                _annotate_messages(messages, context)
 
                 inserted = db.insert_batch(messages)
                 return len(messages), inserted
 
     total, inserted = asyncio.run(_run())
     console.print(f"\n[green]✓[/green] Synced {total} messages, stored {inserted} new")
+
+
+@discord_group.command("tail")
+@click.argument("channel")
+@click.option("-n", "--limit", default=20, help="Show last N messages before following")
+@click.option("--interval", default=5.0, type=click.FloatRange(min=0.5), help="Polling interval in seconds")
+@click.option("--poll-limit", default=100, type=click.IntRange(1, 100), help="Max new messages fetched per poll")
+@click.option("--store/--no-store", default=True, help="Store tailed messages in local SQLite")
+@click.option("--once", is_flag=True, help="Show initial snapshot and exit")
+def dc_tail(channel: str, limit: int, interval: float, poll_limit: int, store: bool, once: bool):
+    """Tail a channel and follow new messages."""
+
+    async def _run():
+        with MessageDB() as db:
+            async with get_client() as client:
+                context = await _fetch_channel_context(client, channel)
+                channel_label = context.get("channel_name") or channel
+                guild_label = context.get("guild_name")
+                scope = f"{guild_label} > #{channel_label}" if guild_label else f"#{channel_label}"
+                last_id = db.get_last_msg_id(channel)
+
+                if limit > 0:
+                    initial = await fetch_messages(client, channel, limit=limit)
+                    _annotate_messages(initial, context)
+                    if store and initial:
+                        db.insert_batch(initial)
+                    for msg in initial:
+                        console.print(_format_message(msg))
+                    if initial:
+                        last_id = initial[-1]["msg_id"]
+                elif last_id is None:
+                    latest = await fetch_messages(client, channel, limit=1)
+                    if latest:
+                        _annotate_messages(latest, context)
+                        if store:
+                            db.insert_batch(latest)
+                        last_id = latest[-1]["msg_id"]
+
+                if once:
+                    return
+
+                console.print(
+                    f"\n[green]Watching[/green] {scope} "
+                    f"[dim](poll every {interval:g}s, Ctrl-C to stop)[/dim]"
+                )
+
+                while True:
+                    messages, last_id, inserted = await _tail_fetch_once(
+                        client,
+                        db,
+                        channel,
+                        after=last_id,
+                        fetch_limit=poll_limit,
+                        context=context,
+                        store=store,
+                    )
+                    for msg in messages:
+                        console.print(_format_message(msg))
+                    if messages and store:
+                        console.print(f"[dim]+{inserted} stored[/dim]")
+                    await asyncio.sleep(interval)
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopped tailing.[/yellow]")
 
 
 @discord_group.command("sync-all")
@@ -191,14 +304,29 @@ def dc_sync_all(limit: int):
 
     async def _run():
         with MessageDB() as db:
-            channels = db.get_channels()
-            if not channels:
-                console.print("[yellow]No channels in database. Run 'discord dc history' first.[/yellow]")
-                return {}
-
-            console.print(f"Syncing {len(channels)} channels...")
-
             async with get_client() as client:
+                guilds = await list_guilds(client)
+                channels: list[dict[str, str | None]] = []
+                for guild in guilds:
+                    guild_channels = await list_channels(client, guild["id"])
+                    for channel in guild_channels:
+                        channels.append(
+                            {
+                                "guild_id": guild["id"],
+                                "guild_name": guild["name"],
+                                "channel_id": channel["id"],
+                                "channel_name": channel["name"],
+                            }
+                        )
+
+                if not channels:
+                    console.print("[yellow]No text channels found for this account.[/yellow]")
+                    return {}
+
+                console.print(
+                    f"Discovered {len(channels)} channels across {len(guilds)} guilds. Syncing..."
+                )
+
                 results: dict[str, int] = {}
                 for ch in channels:
                     ch_id = ch["channel_id"]

@@ -5,6 +5,7 @@ import json
 import click
 from rich.console import Console
 
+from ._channels import resolve_channel_id_or_raise
 from ..db import MessageDB
 
 console = Console(stderr=True)
@@ -24,12 +25,7 @@ def data_group():
 def export(channel: str, fmt: str, output_file: str | None, hours: int | None):
     """Export messages from CHANNEL to text or JSON."""
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel)
-
-        if channel_id is None:
-            console.print(f"[red]Channel '{channel}' not found in database.[/red]")
-            return
-
+        channel_id = resolve_channel_id_or_raise(db, channel)
         msgs = db.get_recent(channel_id=channel_id, hours=hours, limit=100000)
 
     if not msgs:
@@ -61,12 +57,7 @@ def export(channel: str, fmt: str, output_file: str | None, hours: int | None):
 def purge(channel: str, yes: bool):
     """Delete all stored messages for CHANNEL."""
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel)
-
-        if channel_id is None:
-            console.print(f"[red]Channel '{channel}' not found in database.[/red]")
-            return
-
+        channel_id = resolve_channel_id_or_raise(db, channel)
         if not yes:
             count = db.count(channel_id)
             if not click.confirm(f"Delete {count} messages from channel {channel_id}?"):
@@ -86,12 +77,7 @@ def analyze(channel: str, hours: int, prompt: str | None):
     from ..analyzer import analyze_messages
 
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel)
-
-        if channel_id is None:
-            console.print(f"[red]Channel '{channel}' not found.[/red]")
-            return
-
+        channel_id = resolve_channel_id_or_raise(db, channel)
         channels = db.get_channels()
         ch_name = next((c["channel_name"] for c in channels if c["channel_id"] == channel_id), channel)
         msgs = db.get_recent(channel_id=channel_id, hours=hours)
@@ -115,7 +101,7 @@ def summary(channel: str | None, hours: int | None):
     from ..analyzer import analyze_messages
 
     with MessageDB() as db:
-        channel_id = db.resolve_channel_id(channel) if channel else None
+        channel_id = resolve_channel_id_or_raise(db, channel) if channel else None
         if hours:
             msgs = db.get_recent(channel_id=channel_id, hours=hours)
         else:

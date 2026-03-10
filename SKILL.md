@@ -55,6 +55,7 @@ discord dc members <GUILD>   # List members
 discord dc history <CHANNEL_ID> -n 1000   # Fetch history
 discord dc sync <CHANNEL_ID>              # Incremental sync
 discord dc sync-all                       # Sync all known channels
+discord dc tail <CHANNEL_ID> -n 20        # Follow new messages live
 discord dc search <GUILD> "keyword"       # Native Discord search
 ```
 

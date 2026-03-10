@@ -1,66 +1,75 @@
 # discord-cli
 
-[![PyPI version](https://img.shields.io/pypi/v/kabi-discord-cli.svg)](https://pypi.org/project/kabi-discord-cli/)
-[![Python versions](https://img.shields.io/pypi/pyversions/kabi-discord-cli.svg)](https://pypi.org/project/kabi-discord-cli/)
+[![CI](https://github.com/jackwener/discord-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/jackwener/discord-cli/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/kabi_discord_cli.svg)](https://pypi.org/project/kabi-discord-cli/)
+[![Python versions](https://img.shields.io/pypi/pyversions/kabi_discord_cli.svg)](https://pypi.org/project/kabi-discord-cli/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](./LICENSE)
 
-Discord CLI — 在终端获取 Discord 聊天记录、搜索消息、AI 分析。基于 Discord HTTP API + user token（只读）。
+[English](./README.md)
 
-## 推荐项目
+一个面向本地缓存和 AI agent 的 Discord CLI：把消息同步到 SQLite，本地搜索、导出和分析，再把结构化结果交给外部 agent。
 
-- [twitter-cli](https://github.com/jackwener/twitter-cli) — Twitter/X CLI
-- [bilibili-cli](https://github.com/jackwener/bilibili-cli) — Bilibili CLI
-- [xhs-cli](https://github.com/jackwener/xhs-cli) — 小红书 CLI
+discord-cli 通过 Discord HTTP API 访问你本机登录态里的 **user token**。它只适合你自己控制的账号和设备。
+
+## 风险提示
+
+- discord-cli 会读取本地 Discord/浏览器会话中的 **user token**
+- 使用 user token 访问 Discord API 可能触发平台风控或账号限制
+- 只建议在你自己的账号上使用，并且要清楚这类自动化的风险
 
 ## 功能特性
 
-- 🔐 **认证** — 自动从浏览器/Discord 客户端提取 token，一键配置
-- 🏠 **服务器** — 列出 server、channel、成员、服务器详情
-- 📜 **历史** — 拉取消息历史存入 SQLite
-- 🔄 **同步** — 增量同步、批量全量同步
-- 🔍 **搜索** — Discord 原生搜索 + 本地关键词搜索
-- 📊 **分析** — 统计、活跃排行、时间线图表
-- 📅 **今日** — 按频道分组查看今日消息
-- 🤖 **AI** — Claude 驱动的消息分析和摘要
-- 📤 **导出** — text/JSON 格式，方便脚本处理
-- 📊 **JSON 输出** — 所有查询命令支持 `--json`
+- 基于 SQLite 的本地消息缓存，支持 history、sync、search、export 和 analytics
+- `discord dc sync-all` 会直接从 API 发现可访问的文字频道，空库也能冷启动
+- 查询命令支持 `--json`，方便脚本和 agent 调用
+- `timeline --json` 提供机器可读的活跃度数据
+- 可选的 Claude `analyze` / `summary`
+- 更安全的 channel 解析：遇到重名或模糊匹配会直接报错，而不是误操作
 
 ## 安装
 
 ```bash
-# 从 PyPI 安装
+# PyPI
 uv tool install kabi-discord-cli
 # 或
 pipx install kabi-discord-cli
 
+# 安装 AI 相关命令
+uv tool install 'kabi-discord-cli[ai]'
+
+# 从 GitHub 安装
+uv tool install git+https://github.com/jackwener/discord-cli.git
+
 # 从源码安装
 git clone git@github.com:jackwener/discord-cli.git
 cd discord-cli
-uv sync
+uv sync --extra dev
 ```
+
+如果要使用 AI 命令，还需要安装 `ai` extra 并配置 `ANTHROPIC_API_KEY`。
 
 ## 快速开始
 
 ```bash
-# 自动提取并保存 token
+# 从本地 Discord / 浏览器登录态提取 token 并保存
 discord auth --save
 
-# 检查登录状态
+# 检查认证
 discord status
 discord whoami
 
-# 列出 server 和 channel
+# 浏览 guild 和 channel
 discord dc guilds
 discord dc channels <guild_id>
 
-# 拉取历史消息
-discord dc history <channel_id> -n 1000
+# 冷启动同步本地库
+discord dc sync-all -n 500
 
-# 增量同步
-discord dc sync <channel_id>
-discord dc sync-all
-
-# 查看今日消息
+# 查询本地缓存
 discord today
+discord recent -n 50
+discord search "rust" -c general --json
+discord timeline --by hour --json
 ```
 
 ## 命令一览
@@ -69,49 +78,83 @@ discord today
 
 | 命令 | 说明 |
 |------|------|
-| `auth [--save]` | 从浏览器/Discord 客户端提取 token |
-| `status` | 检查 token 是否有效（exit code 0/1） |
-| `whoami [--json]` | 查看用户详情 |
+| `auth [--save]` | 从本地 Discord/浏览器会话提取 token |
+| `status` | 检查当前 token 是否有效 |
+| `whoami [--json]` | 查看当前账号资料 |
 
-### Discord 操作 (`discord dc ...`)
-
-| 命令 | 说明 |
-|------|------|
-| `dc guilds [--json]` | 列出已加入的 server |
-| `dc channels GUILD [--json]` | 列出文字频道 |
-| `dc history CHANNEL [-n 1000]` | 拉取历史消息 |
-| `dc sync CHANNEL` | 增量同步 |
-| `dc sync-all` | 同步所有已知频道 |
-| `dc search GUILD 关键词 [-c CH]` | Discord 原生搜索 |
-| `dc members GUILD [--max 50]` | 列出成员 |
-| `dc info GUILD [--json]` | 服务器详情 |
-
-### 查询
+### Discord API (`discord dc ...`)
 
 | 命令 | 说明 |
 |------|------|
-| `search 关键词 [-c CH] [--json]` | 搜索本地存储的消息 |
+| `dc guilds [--json]` | 列出已加入的 guild |
+| `dc channels GUILD [--json]` | 列出 guild 下的文字频道 |
+| `dc history CHANNEL [-n 1000]` | 拉取单个频道历史消息 |
+| `dc sync CHANNEL [-n 5000]` | 增量同步单个频道 |
+| `dc sync-all [-n 5000]` | 自动发现并同步可访问的文字频道 |
+| `dc tail CHANNEL [--once]` | 像 `tail -f` 一样轮询新消息 |
+| `dc search GUILD KEYWORD [-c CHANNEL_ID] [--json]` | 使用 Discord 原生搜索 |
+| `dc members GUILD [--max 50] [--json]` | 列出 guild 成员 |
+| `dc info GUILD [--json]` | 查看 guild 详情 |
+
+### 本地查询
+
+| 命令 | 说明 |
+|------|------|
+| `search KEYWORD [-c CHANNEL] [-n 50] [--json]` | 搜索本地缓存消息 |
+| `recent [-c CHANNEL] [--hours N] [-n 50] [--json]` | 查看最新缓存消息 |
 | `stats [--json]` | 各频道消息统计 |
-| `today [-c CH] [--json]` | 今日消息 |
-| `top [-c CH] [--hours N] [--json]` | 最活跃发言人排行 |
-| `timeline [-c CH] [--by day\|hour]` | 消息活跃度时间线 |
+| `today [-c CHANNEL] [--json]` | 查看今天的消息 |
+| `top [-c CHANNEL] [--hours N] [--json]` | 查看最活跃发言人 |
+| `timeline [-c CHANNEL] [--hours N] [--by day\|hour] [--json]` | 查看消息活跃度时间线 |
 
 ### 数据与 AI
 
 | 命令 | 说明 |
 |------|------|
-| `export CHANNEL [-f text\|json] [-o FILE]` | 导出消息 |
-| `purge CHANNEL [-y]` | 删除本地存储的消息 |
-| `analyze CHANNEL [--hours 24] [-p PROMPT]` | AI 分析（Claude） |
-| `summary [-c CH] [--hours N]` | AI 每日摘要 |
+| `export CHANNEL [-f text\|json] [-o FILE] [--hours N]` | 导出本地消息 |
+| `purge CHANNEL [-y]` | 删除某个频道的本地缓存 |
+| `analyze CHANNEL [--hours 24] [-p PROMPT]` | 用 Claude 分析单个频道 |
+| `summary [-c CHANNEL] [--hours N]` | 汇总今天或最近 N 小时的消息 |
 
-## 认证方式
+## 行为说明
 
-discord-cli 自动从以下位置提取 token：
-1. **Discord 桌面客户端** — 读取本地 leveldb
-2. **浏览器** — Chrome、Edge、Brave 的 local storage
+- 大多数顶层查询命令读的是本地 SQLite，不是每次都直接查 Discord
+- `discord dc sync-all` 现在会从 API 发现 guild/channel，所以空数据库也能直接冷启动
+- channel 名称解析基于本地数据库；如果一个名字命中多个频道，CLI 会报错并要求你改用更具体的名字或 channel ID
 
-Token 会通过 API 验证后才保存。运行 `discord auth --save` 一键完成配置。
+## AI 用法
+
+先安装 AI 依赖：
+
+```bash
+uv sync --extra ai
+export ANTHROPIC_API_KEY=...
+```
+
+然后：
+
+```bash
+discord analyze general --hours 24
+discord summary --hours 12
+discord search "release" --json
+```
+
+仓库里还附带了给 agent 使用的 [SKILL.md](./SKILL.md)。
+
+## 开发
+
+```bash
+uv sync --extra dev --extra ai
+uv run ruff check .
+uv run python -m pytest
+uv build
+```
+
+## 推荐项目
+
+- [twitter-cli](https://github.com/jackwener/twitter-cli) — Twitter/X CLI
+- [bilibili-cli](https://github.com/jackwener/bilibili-cli) — Bilibili CLI
+- [xhs-cli](https://github.com/jackwener/xhs-cli) — 小红书 CLI
 
 ## License
 
