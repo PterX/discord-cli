@@ -109,5 +109,37 @@ def test_status_auto_yaml_when_stdout_is_not_tty(monkeypatch):
 
     assert result.exit_code == 0
     payload = yaml.safe_load(result.output)
-    assert payload["authenticated"] is True
-    assert payload["user"]["username"] == "alice"
+    assert payload["ok"] is True
+    assert payload["schema_version"] == "1"
+    assert payload["data"]["authenticated"] is True
+    assert payload["data"]["user"]["username"] == "alice"
+
+
+def test_whoami_auto_yaml_when_stdout_is_not_tty(monkeypatch):
+    monkeypatch.setenv("OUTPUT", "auto")
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_get_me(client):
+        return {
+            "id": "u-1",
+            "username": "alice",
+            "global_name": "Alice",
+            "created_at": "2026-03-10T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr("discord_cli.client.get_client", lambda: FakeClient())
+    monkeypatch.setattr("discord_cli.client.get_me", fake_get_me)
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["whoami"])
+
+    assert result.exit_code == 0
+    payload = yaml.safe_load(result.output)
+    assert payload["ok"] is True
+    assert payload["data"]["user"]["username"] == "alice"

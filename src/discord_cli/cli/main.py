@@ -6,10 +6,25 @@ from rich.table import Table
 
 from .data import data_group
 from .discord_cmds import discord_group
-from ._output import emit_structured, structured_output_options
+from ._output import emit_structured, error_payload, structured_output_options, success_payload
 from .query import query_group
 
 console = Console(stderr=True)
+
+
+def _discord_user_payload(user: dict) -> dict[str, object]:
+    """Normalize Discord user info for structured agent output."""
+    return {
+        "id": user.get("id", ""),
+        "name": user.get("global_name") or user.get("username", ""),
+        "username": user.get("username", ""),
+        "global_name": user.get("global_name") or "",
+        "email": user.get("email") or "",
+        "phone": user.get("phone") or "",
+        "mfa_enabled": bool(user.get("mfa_enabled", False)),
+        "premium_type": user.get("premium_type", 0),
+        "created_at": user.get("created_at", ""),
+    }
 
 
 @click.group()
@@ -103,7 +118,7 @@ def status(as_json: bool, as_yaml: bool):
         token = get_token()
     except RuntimeError as e:
         if emit_structured(
-            {"authenticated": False, "error": str(e)},
+            error_payload("not_authenticated", str(e)),
             as_json=as_json,
             as_yaml=as_yaml,
         ):
@@ -119,10 +134,12 @@ def status(as_json: bool, as_yaml: bool):
         )
         if resp.status_code == 200:
             user = resp.json()
-            payload = {
-                "authenticated": True,
-                "user": user,
-            }
+            payload = success_payload(
+                {
+                    "authenticated": True,
+                    "user": _discord_user_payload(user),
+                }
+            )
             if emit_structured(payload, as_json=as_json, as_yaml=as_yaml):
                 sys.exit(0)
             name = user.get("global_name") or user.get("username", "?")
@@ -130,7 +147,11 @@ def status(as_json: bool, as_yaml: bool):
             sys.exit(0)
         else:
             if emit_structured(
-                {"authenticated": False, "status_code": resp.status_code},
+                error_payload(
+                    "invalid_token",
+                    f"Token invalid (HTTP {resp.status_code})",
+                    details={"status_code": resp.status_code},
+                ),
                 as_json=as_json,
                 as_yaml=as_yaml,
             ):
@@ -139,7 +160,7 @@ def status(as_json: bool, as_yaml: bool):
             sys.exit(1)
     except Exception as e:
         if emit_structured(
-            {"authenticated": False, "error": str(e)},
+            error_payload("connection_error", str(e)),
             as_json=as_json,
             as_yaml=as_yaml,
         ):
@@ -160,9 +181,14 @@ def whoami(as_json: bool, as_yaml: bool):
         async with get_client() as client:
             return await get_me(client)
 
-    info = asyncio.run(_run())
+    try:
+        info = asyncio.run(_run())
+    except Exception as exc:
+        if emit_structured(error_payload("auth_error", str(exc)), as_json=as_json, as_yaml=as_yaml):
+            raise SystemExit(1) from None
+        raise click.ClickException(str(exc)) from exc
 
-    if emit_structured(info, as_json=as_json, as_yaml=as_yaml):
+    if emit_structured(success_payload({"user": _discord_user_payload(info)}), as_json=as_json, as_yaml=as_yaml):
         return
 
     premium_names = {0: "None", 1: "Nitro Classic", 2: "Nitro", 3: "Nitro Basic"}

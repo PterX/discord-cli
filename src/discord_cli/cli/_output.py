@@ -11,6 +11,7 @@ import click
 import yaml
 
 _OUTPUT_ENV = "OUTPUT"
+_SCHEMA_VERSION = "1"
 
 
 def default_structured_format(*, as_json: bool, as_yaml: bool) -> str | None:
@@ -63,3 +64,27 @@ def emit_structured(data: Any, *, as_json: bool, as_yaml: bool) -> bool:
         return False
     click.echo(dump_structured(data, fmt=fmt))
     return True
+
+
+def success_payload(data: Any) -> dict[str, Any]:
+    """Wrap structured success data in the shared agent schema."""
+    return {
+        "ok": True,
+        "schema_version": _SCHEMA_VERSION,
+        "data": data,
+    }
+
+
+def error_payload(code: str, message: str, *, details: Any | None = None) -> dict[str, Any]:
+    """Wrap structured error data in the shared agent schema."""
+    error = {
+        "code": code,
+        "message": message,
+    }
+    if details is not None:
+        error["details"] = details
+    return {
+        "ok": False,
+        "schema_version": _SCHEMA_VERSION,
+        "error": error,
+    }
