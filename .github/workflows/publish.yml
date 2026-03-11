@@ -1,34 +1,14 @@
 name: Publish to PyPI
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
-
-      - name: Install dependencies
-        run: uv sync --extra dev
-
-      - name: Lint
-        run: uv run ruff check .
-
-      - name: Test
-        run: uv run python -m pytest -q
-
-      - name: Build
-        run: uv build
-
-      - name: Twine check
-        run: uv run twine check dist/*
+    uses: ./.github/workflows/ci.yml
 
   publish:
     needs: verify
@@ -36,16 +16,18 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
-      contents: read
 
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
 
-      - name: Build
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build package
         run: uv build
 
       - name: Publish to PyPI
